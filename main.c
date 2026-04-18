@@ -42,9 +42,9 @@ typedef struct {
 } mat;
 
 typedef struct {
-  mat *X; // matrix
-  mat *y; // array
-  mat *w; // array
+  mat *X;
+  mat *y;
+  mat *w;
   f32 b;
 } params;
 
@@ -52,15 +52,17 @@ mem_arena *arena_create(u64 size);
 void arena_destroy(mem_arena *arena);
 void *arena_alloc(mem_arena *arena, u64 size);
 void arena_free(mem_arena *arena, u64 size);
+u64 arena_mark(mem_arena *arena);
+void arena_goto(mem_arena *arena, u64 mark);
 
-mat *mat_create(mem_arena *restrict arena, u32 cols, u32 rows, f32 *init);
+mat *mat_create(mem_arena *restrict arena, u32 rows, u32 cols, f32 *init);
 mat *mat_mul(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
-mat *mat_sum(mem_arena *arena, mat *restrict matrix, f32 f);
-
-mat *forward_pass(mem_arena *arena, params *p);
-void gradient_computation(mem_arena *arena, params *p, mat *y_hat, mat *dw,
-                          f32 *db);
-void gradient_descent(params *p, f32 lr, mat *dw, f32 db);
+mat *mat_transpose(mem_arena *arena, mat *restrict mat_a);
+mat *mat_scale(mem_arena *arena, mat *restrict mat_a, f32 num);
+mat *mat_sum_float(mem_arena *arena, mat *restrict mat_a, f32 num);
+mat *mat_sum_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
+mat *mat_sub_float(mem_arena *arena, mat *restrict mat_a, f32 num);
+mat *mat_sub_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
 
 mem_arena *arena_create(u64 size) {
   mem_arena *arena = (mem_arena *)malloc(sizeof(mem_arena));
@@ -94,7 +96,10 @@ void arena_free(mem_arena *arena, u64 size) {
   arena->offset -= aligned;
 }
 
-mat *mat_create(mem_arena *restrict arena, u32 cols, u32 rows, f32 *init) {
+u64 arena_mark(mem_arena *arena) { return arena->offset; }
+void arena_goto(mem_arena *arena, u64 mark) { arena->offset = mark; }
+
+mat *mat_create(mem_arena *restrict arena, u32 rows, u32 cols, f32 *init) {
   mat *matrix = arena_alloc(arena, sizeof(mat) + sizeof(f32) * rows * cols);
   matrix->rows = rows;
   matrix->cols = cols;
@@ -126,24 +131,6 @@ mat *mat_mul(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
   return mat_c;
 }
 
-mat *mat_sub(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
-  mat *mat_c = mat_create(arena, mat_a->rows, mat_b->cols, 0);
-
-  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
-    mat_c->data[i] = 0.0f;
-  }
-
-  return mat_c;
-}
-
-mat *mat_sum(mem_arena *arena, mat *restrict mat_a, f32 f) {
-  mat *mat_b = mat_create(arena, mat_a->cols, mat_a->rows, NULL);
-  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
-    mat_a->data[i] = f;
-  }
-  return mat_b;
-}
-
 mat *mat_transpose(mem_arena *arena, mat *restrict mat_a) {
   mat *mat_t = mat_create(arena, mat_a->cols, mat_a->rows, 0);
   for (u32 i = 0; i < mat_t->rows; i++) {
@@ -154,50 +141,108 @@ mat *mat_transpose(mem_arena *arena, mat *restrict mat_a) {
   return mat_t;
 }
 
-// (X @ self.w) + self.b
-// matrix X * array w + b = y_hat (predicted y)
-mat *forward_pass(mem_arena *arena, params *p) {
-  // return y_hat;
-  return mat_sum(arena, mat_mul(arena, p->X, p->w), p->b);
+mat *mat_scale(mem_arena *arena, mat *restrict mat_a, f32 f) {
+  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
+  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
+    mat_b->data[i] = mat_a->data[i] * f;
+  }
+  return mat_b;
 }
 
-void gradient_computation(mem_arena *arena, params *p, mat *y_hat, mat *dw,
-                          f32 *db) {
+f32 mat_sum(mat *restrict matrix) {
+  f32 sum = 0.0f;
+  for (u32 i = 0; i < matrix->cols * matrix->rows; i++) {
+    sum += matrix->data[i];
+  }
+  return sum;
+}
+
+mat *mat_sum_float(mem_arena *arena, mat *restrict mat_a, f32 f) {
+  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
+  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
+    mat_b->data[i] = mat_a->data[i] + f;
+  }
+  return mat_b;
+}
+
+mat *mat_sum_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
+  mat *mat_c = mat_create(arena, mat_a->rows, mat_a->cols, 0);
+  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
+    mat_c->data[i] = mat_a->data[i] + mat_b->data[i];
+  }
+  return mat_c;
+}
+
+mat *mat_sub_float(mem_arena *arena, mat *restrict mat_a, f32 f) {
+  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
+  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
+    mat_b->data[i] = mat_a->data[i] - f;
+  }
+  return mat_b;
+}
+
+mat *mat_sub_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
+  mat *mat_c = mat_create(arena, mat_a->rows, mat_a->cols, 0);
+  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
+    mat_c->data[i] = mat_a->data[i] - mat_b->data[i];
+  }
+  return mat_c;
+}
+
+void black_box(mem_arena *arena, params *p) {
   u32 m = p->X->rows;
+  mat *y_hat;
 
   u32 iterations = 1000;
   f32 learning_step = 0.01f;
 
+  mat *X_transposed = mat_transpose(arena, p->X);
+
   for (u32 i = 0; i < iterations; i++) {
-    y_hat = forward_pass(arena, p);
-    mat *error = mat_sub(arena, y_hat, p->y);
+    u64 mark = arena_mark(arena);
+
+    y_hat = mat_sum_float(arena, mat_mul(arena, p->X, p->w), p->b);
+
+    mat *error = mat_sub_mat(arena, y_hat, p->y);
+
+    mat *dw = mat_scale(arena, mat_mul(arena, X_transposed, error), 1.0f / m);
+
+    f32 db = (1.0f / m) * mat_sum(error);
+
+    for (u32 j = 0; j < p->w->rows * p->w->cols; j++) {
+      p->w->data[j] -= learning_step * dw->data[j];
+    }
+
+    p->b -= db * learning_step;
+
+    arena_goto(arena, mark);
   }
 }
-void gradient_descent(params *p, f32 lr, mat *dw, f32 db);
 
 i32 main(void) {
   mem_arena *arena = arena_create(MiB(20));
 
-  // mat_create(mem_arena *restrict arena, u32 cols, u32 rows)
-  params *param = arena_alloc(arena, sizeof(params));
+  params *p = arena_alloc(arena, sizeof(params));
 
   f32 test_X[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
                   2.0f, 1.0f, 1.0f, 2.0f, 3.0f, 2.0f, 2.0f, 3.0f};
 
   f32 test_y[] = {1.0f, 4.0f, 3.0f, 6.0f, 10.0f, 8.0f, 14.0f, 13.0f};
 
-  param->X = mat_create(arena, 2, 8, test_X);
-  param->y = mat_create(arena, 1, 8, test_y);
-  param->w = mat_create(arena, 8, 1, NULL);
-  param->b = 0.0f;
+  p->X = mat_create(arena, 8, 2, test_X);
+  p->y = mat_create(arena, 8, 1, test_y);
+  p->w = mat_create(arena, 2, 1, NULL);
+  p->b = 0.0f;
 
-  // for (u32 i = 0; i < param->X->cols * param->X->rows; i++) {
-  //   if (i % param->X->cols == 0) {
-  //     printf("\n");
-  //   }
-  //   printf("%.0f ", param->X->data[i]);
-  // }
-  // printf("\n");
+  black_box(arena, p);
+
+  for (u32 i = 0; i < p->w->cols * p->w->rows; i++) {
+    if (i % p->w->cols == 0) {
+      printf("\n");
+    }
+    printf("%.0f ", p->w->data[i]);
+  }
+  printf("\n");
 
   arena_destroy(arena);
   return EXIT_SUCCESS;
