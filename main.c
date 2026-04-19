@@ -1,7 +1,7 @@
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -56,7 +56,7 @@ void arena_free(mem_arena *arena, u64 size);
 u64 arena_mark(mem_arena *arena);
 void arena_goto(mem_arena *arena, u64 mark);
 
-mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init);
+mat *mat_create(mem_arena *arena, u32 rows, u32 cols);
 void mat_mul(mat *out, mat *a, mat *b);
 void mat_transpose(mat *out, mat *a);
 void mat_scale(mat *out, mat *a, f32 f);
@@ -101,24 +101,25 @@ void arena_free(mem_arena *arena, u64 size) {
 u64 arena_mark(mem_arena *arena) { return arena->offset; };
 void arena_goto(mem_arena *arena, u64 mark) { arena->offset = mark; };
 
-mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init) {
+mat *mat_create(mem_arena *arena, u32 rows, u32 cols) {
   mat *matrix = arena_alloc(arena, sizeof(mat) + sizeof(f32) * rows * cols);
   matrix->rows = rows;
   matrix->cols = cols;
   matrix->data = (f32 *)(matrix + 1);
 
   for (u32 i = 0; i < rows * cols; i++) {
-    matrix->data[i] = init ? init[i] : 0.0f;
+    matrix->data[i] = 0.0f;
   }
 
   return matrix;
 }
 
 void mat_mul(mat *out, mat *a, mat *b) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == b->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == b->cols, "incorrect output matrix size\n");
   ASSERT(a->cols == b->rows, "incorrect matrix multiplication sizes!\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < a->rows; i++) {
     for (u32 j = 0; j < b->cols; j++) {
       f32 sum = 0.0f;
@@ -131,9 +132,10 @@ void mat_mul(mat *out, mat *a, mat *b) {
 }
 
 void mat_transpose(mat *out, mat *a) {
-  ASSERT(out->rows == a->cols, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->cols, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->rows, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows; i++) {
     for (u32 j = 0; j < out->cols; j++) {
       out->data[i * out->cols + j] = a->data[j * a->cols + i];
@@ -142,9 +144,10 @@ void mat_transpose(mat *out, mat *a) {
 }
 
 void mat_scale(mat *out, mat *a, f32 f) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows * out->cols; i++) {
     out->data[i] = a->data[i] * f;
   }
@@ -152,6 +155,7 @@ void mat_scale(mat *out, mat *a, f32 f) {
 
 f32 mat_sum(mat *a) {
   f32 sum = 0.0f;
+#pragma omp parallel for reduction(+ : sum)
   for (u32 i = 0; i < a->cols * a->rows; i++) {
     sum += a->data[i];
   }
@@ -159,36 +163,40 @@ f32 mat_sum(mat *a) {
 }
 
 void mat_sum_float(mat *out, mat *a, f32 f) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows * out->cols; i++) {
     out->data[i] = a->data[i] + f;
   }
 }
 
 void mat_sum_mat(mat *out, mat *a, mat *b) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows * out->cols; i++) {
     out->data[i] = a->data[i] + b->data[i];
   }
 }
 
 void mat_sub_float(mat *out, mat *a, f32 f) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows * out->cols; i++) {
     out->data[i] = a->data[i] - f;
   }
 }
 
 void mat_sub_mat(mat *out, mat *a, mat *b) {
-  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
-  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->rows == a->rows, "incorrect output matrix size\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size\n");
 
+#pragma omp parallel for
   for (u32 i = 0; i < out->rows * out->cols; i++) {
     out->data[i] = a->data[i] - b->data[i];
   }
@@ -198,13 +206,13 @@ void black_box(mem_arena *arena, parameters *p) {
   u64 mark = arena_mark(arena);
 
   u32 m = p->X->rows;
-  u32 iterations = 1600;
+  u32 iterations = 20000;
   f32 learning_step = 0.01f;
 
-  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols, NULL);
-  mat *error = mat_create(arena, y_hat->rows, y_hat->cols, NULL);
-  mat *dw = mat_create(arena, p->w->rows, p->w->cols, NULL);
-  mat *X_T = mat_create(arena, p->X->cols, p->X->rows, NULL);
+  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols);
+  mat *error = mat_create(arena, y_hat->rows, y_hat->cols);
+  mat *dw = mat_create(arena, p->w->rows, p->w->cols);
+  mat *X_T = mat_create(arena, p->X->cols, p->X->rows);
   mat_transpose(X_T, p->X);
 
   for (u32 i = 0; i < iterations; i++) {
@@ -225,20 +233,33 @@ void black_box(mem_arena *arena, parameters *p) {
     p->b -= db * learning_step;
   }
 
-  printf("arena size: %f MiB\n", (f32)arena->offset / MiB(1));
-
   arena_goto(arena, mark);
 }
 
-// def calculate_rmse(self: "LinearRegression", X: np.ndarray,
-// y: np.ndarray) -> float:
-//     y_hat = self.predict(X)
-//
-//     return np.sqrt(np.mean((y_hat - y) ** 2))
+f32 calculate_rmse(mem_arena *arena, parameters *p) {
+  u64 mark = arena_mark(arena);
+
+  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols);
+  mat_mul(y_hat, p->X, p->w);
+  mat_sum_float(y_hat, y_hat, p->b);
+
+  f32 sum_squared_error = 0.0f;
+
+  for (u32 i = 0; i < p->y->rows; i++) {
+    f32 error = y_hat->data[i] - p->y->data[i];
+    sum_squared_error += error * error;
+  }
+
+  f32 mse = sum_squared_error / p->y->rows;
+
+  arena_goto(arena, mark);
+
+  return sqrt(mse);
+}
 
 f32 calculate_r2(mem_arena *arena, parameters *p) {
   u64 mark = arena_mark(arena);
-  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols, NULL);
+  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols);
   mat_mul(y_hat, p->X, p->w);
   mat_sum_float(y_hat, y_hat, p->b);
 
@@ -263,38 +284,81 @@ f32 calculate_r2(mem_arena *arena, parameters *p) {
   }
 }
 
+mat *mat_load_csv(mem_arena *arena, const char *file_path) {
+  FILE *f = fopen(file_path, "r");
+  ASSERT(f, "could not open file");
+
+  u32 rows = 0;
+  u32 cols = 0;
+  char c;
+
+  while ((c = fgetc(f)) != '\n' && c != EOF) {
+    if (c == ',') {
+      cols++;
+    }
+  }
+  cols++;
+
+  rewind(f);
+  while ((c = fgetc(f)) != EOF) {
+    if (c == '\n') {
+      rows++;
+    }
+  }
+
+  fseek(f, -1, SEEK_END);
+  if (fgetc(f) != '\n') {
+    rows++;
+  }
+
+  mat *matrix = mat_create(arena, rows, cols);
+
+  rewind(f);
+  for (u32 i = 0; i < rows * cols; i++) {
+    if (fscanf(f, " %f ,", &matrix->data[i]) == 0) {
+      break;
+    }
+  }
+
+  fclose(f);
+  return matrix;
+}
+
 // TODO:
-// - read csv
 // - one-hot encoding
 // - standardization
-//
 // - dynamic iterations
-// - calculate rmse
 // - split black_box into named functions
-// - dynamic arena alloc:
-//    - read columns in csv
-//    - read rows in csv
-//    - create arena of columns * rows * sizeof(f32) * 10?
+// - dynamic arena alloc
 
 i32 main(void) {
   mem_arena *arena = arena_create(MiB(20));
 
   parameters *p = arena_alloc(arena, sizeof(parameters));
 
-  f32 test_X[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
-                  2.0f, 1.0f, 1.0f, 2.0f, 3.0f, 2.0f, 2.0f, 3.0f};
+  mat *train_X = mat_load_csv(arena, "c_train_x.csv");
+  mat *train_y = mat_load_csv(arena, "c_train_y.csv");
 
-  f32 test_y[] = {1.0f, 4.0f, 3.0f, 6.0f, 10.0f, 8.0f, 14.0f, 13.0f};
-
-  p->X = mat_create(arena, 8, 2, test_X);
-  p->y = mat_create(arena, 8, 1, test_y);
-  p->w = mat_create(arena, 2, 1, NULL);
+  p->X = train_X;
+  p->y = train_y;
+  p->w = mat_create(arena, p->X->cols, 1);
   p->b = 0.0f;
 
   black_box(arena, p);
+
+  mat *test_X = mat_load_csv(arena, "c_test_x.csv");
+  mat *test_y = mat_load_csv(arena, "c_test_y.csv");
+
+  p->X = test_X;
+  p->y = test_y;
+
   f32 r2 = calculate_r2(arena, p);
-  printf("r2: %f\n", r2);
-  printf(" b: %f\n", p->b);
+  f32 rmse = calculate_rmse(arena, p);
+
+  printf("  r2: %f\n", r2);
+  printf("rmse: %f\n", rmse);
+  printf("bias: %f\n", p->b);
+  printf("weights:\n");
   for (u32 i = 0; i < p->w->cols * p->w->rows; i++) {
     printf("%f ", p->w->data[i]);
   }
