@@ -53,6 +53,8 @@ mem_arena *arena_create(u64 size);
 void arena_destroy(mem_arena *arena);
 void *arena_alloc(mem_arena *arena, u64 size);
 void arena_free(mem_arena *arena, u64 size);
+u64 arena_mark(mem_arena *arena);
+void arena_goto(mem_arena *arena, u64 mark);
 
 mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init);
 void mat_mul(mat *out, mat *a, mat *b);
@@ -95,6 +97,9 @@ void arena_free(mem_arena *arena, u64 size) {
   ASSERT(arena->offset >= aligned, "arena pop out of bounds\n");
   arena->offset -= aligned;
 }
+
+u64 arena_mark(mem_arena *arena) { return arena->offset; };
+void arena_goto(mem_arena *arena, u64 mark) { arena->offset = mark; };
 
 mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init) {
   mat *matrix = arena_alloc(arena, sizeof(mat) + sizeof(f32) * rows * cols);
@@ -190,7 +195,7 @@ void mat_sub_mat(mat *out, mat *a, mat *b) {
 }
 
 void black_box(mem_arena *arena, parameters *p) {
-  u64 mark = arena->offset;
+  u64 mark = arena_mark(arena);
 
   u32 m = p->X->rows;
   u32 iterations = 1600;
@@ -222,7 +227,7 @@ void black_box(mem_arena *arena, parameters *p) {
 
   printf("arena size: %f MiB\n", (f32)arena->offset / MiB(1));
 
-  arena->offset = mark;
+  arena_goto(arena, mark);
 }
 
 // def calculate_rmse(self: "LinearRegression", X: np.ndarray,
@@ -232,7 +237,7 @@ void black_box(mem_arena *arena, parameters *p) {
 //     return np.sqrt(np.mean((y_hat - y) ** 2))
 
 f32 calculate_r2(mem_arena *arena, parameters *p) {
-  u64 mark = arena->offset;
+  u64 mark = arena_mark(arena);
   mat *y_hat = mat_create(arena, p->X->rows, p->w->cols, NULL);
   mat_mul(y_hat, p->X, p->w);
   mat_sum_float(y_hat, y_hat, p->b);
@@ -249,7 +254,7 @@ f32 calculate_r2(mem_arena *arena, parameters *p) {
     ss_tot += tot * tot;
   }
 
-  arena->offset = mark;
+  arena_goto(arena, mark);
 
   if (ss_tot == 0.0f) {
     return 0.0f;
@@ -257,6 +262,19 @@ f32 calculate_r2(mem_arena *arena, parameters *p) {
     return 1.0f - (ss_res / ss_tot);
   }
 }
+
+// TODO:
+// - read csv
+// - one-hot encoding
+// - standardization
+//
+// - dynamic iterations
+// - calculate rmse
+// - split black_box into named functions
+// - dynamic arena alloc:
+//    - read columns in csv
+//    - read rows in csv
+//    - create arena of columns * rows * sizeof(f32) * 10?
 
 i32 main(void) {
   mem_arena *arena = arena_create(MiB(20));
