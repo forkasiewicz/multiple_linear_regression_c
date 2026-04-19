@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -46,23 +47,22 @@ typedef struct {
   mat *y;
   mat *w;
   f32 b;
-} params;
+} parameters;
 
 mem_arena *arena_create(u64 size);
 void arena_destroy(mem_arena *arena);
 void *arena_alloc(mem_arena *arena, u64 size);
 void arena_free(mem_arena *arena, u64 size);
-u64 arena_mark(mem_arena *arena);
-void arena_goto(mem_arena *arena, u64 mark);
 
-mat *mat_create(mem_arena *restrict arena, u32 rows, u32 cols, f32 *init);
-mat *mat_mul(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
-mat *mat_transpose(mem_arena *arena, mat *restrict mat_a);
-mat *mat_scale(mem_arena *arena, mat *restrict mat_a, f32 num);
-mat *mat_sum_float(mem_arena *arena, mat *restrict mat_a, f32 num);
-mat *mat_sum_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
-mat *mat_sub_float(mem_arena *arena, mat *restrict mat_a, f32 num);
-mat *mat_sub_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b);
+mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init);
+void mat_mul(mat *out, mat *a, mat *b);
+void mat_transpose(mat *out, mat *a);
+void mat_scale(mat *out, mat *a, f32 f);
+f32 mat_sum(mat *a);
+void mat_sum_float(mat *out, mat *a, f32 f);
+void mat_sum_mat(mat *out, mat *a, mat *b);
+void mat_sub_float(mat *out, mat *a, f32 f);
+void mat_sub_mat(mat *out, mat *a, mat *b);
 
 mem_arena *arena_create(u64 size) {
   mem_arena *arena = (mem_arena *)malloc(sizeof(mem_arena));
@@ -96,10 +96,7 @@ void arena_free(mem_arena *arena, u64 size) {
   arena->offset -= aligned;
 }
 
-u64 arena_mark(mem_arena *arena) { return arena->offset; }
-void arena_goto(mem_arena *arena, u64 mark) { arena->offset = mark; }
-
-mat *mat_create(mem_arena *restrict arena, u32 rows, u32 cols, f32 *init) {
+mat *mat_create(mem_arena *arena, u32 rows, u32 cols, f32 *init) {
   mat *matrix = arena_alloc(arena, sizeof(mat) + sizeof(f32) * rows * cols);
   matrix->rows = rows;
   matrix->cols = cols;
@@ -112,100 +109,107 @@ mat *mat_create(mem_arena *restrict arena, u32 rows, u32 cols, f32 *init) {
   return matrix;
 }
 
-mat *mat_mul(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
-  mat *mat_c = mat_create(arena, mat_a->rows, mat_b->cols, 0);
+void mat_mul(mat *out, mat *a, mat *b) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == b->cols, "incorrect output matrix size!\n");
+  ASSERT(a->cols == b->rows, "incorrect matrix multiplication sizes!\n");
 
-  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
-    mat_c->data[i] = 0.0f;
-  }
-
-  for (u32 i = 0; i < mat_a->rows; i++) {
-    for (u32 j = 0; j < mat_b->cols; j++) {
-      for (u32 k = 0; k < mat_a->cols; k++) {
-        mat_c->data[i * mat_c->cols + j] +=
-            mat_a->data[i * mat_a->cols + k] * mat_b->data[k * mat_b->cols + j];
+  for (u32 i = 0; i < a->rows; i++) {
+    for (u32 j = 0; j < b->cols; j++) {
+      f32 sum = 0.0f;
+      for (u32 k = 0; k < a->cols; k++) {
+        sum += a->data[i * a->cols + k] * b->data[k * b->cols + j];
       }
+      out->data[i * out->cols + j] = sum;
     }
   }
-
-  return mat_c;
 }
 
-mat *mat_transpose(mem_arena *arena, mat *restrict mat_a) {
-  mat *mat_t = mat_create(arena, mat_a->cols, mat_a->rows, 0);
-  for (u32 i = 0; i < mat_t->rows; i++) {
-    for (u32 j = 0; j < mat_t->cols; j++) {
-      mat_t->data[i * mat_t->cols + j] = mat_a->data[j * mat_a->cols + i];
+void mat_transpose(mat *out, mat *a) {
+  ASSERT(out->rows == a->cols, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->rows, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows; i++) {
+    for (u32 j = 0; j < out->cols; j++) {
+      out->data[i * out->cols + j] = a->data[j * a->cols + i];
     }
   }
-  return mat_t;
 }
 
-mat *mat_scale(mem_arena *arena, mat *restrict mat_a, f32 f) {
-  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
-  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
-    mat_b->data[i] = mat_a->data[i] * f;
+void mat_scale(mat *out, mat *a, f32 f) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows * out->cols; i++) {
+    out->data[i] = a->data[i] * f;
   }
-  return mat_b;
 }
 
-f32 mat_sum(mat *restrict matrix) {
+f32 mat_sum(mat *a) {
   f32 sum = 0.0f;
-  for (u32 i = 0; i < matrix->cols * matrix->rows; i++) {
-    sum += matrix->data[i];
+  for (u32 i = 0; i < a->cols * a->rows; i++) {
+    sum += a->data[i];
   }
   return sum;
 }
 
-mat *mat_sum_float(mem_arena *arena, mat *restrict mat_a, f32 f) {
-  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
-  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
-    mat_b->data[i] = mat_a->data[i] + f;
+void mat_sum_float(mat *out, mat *a, f32 f) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows * out->cols; i++) {
+    out->data[i] = a->data[i] + f;
   }
-  return mat_b;
 }
 
-mat *mat_sum_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
-  mat *mat_c = mat_create(arena, mat_a->rows, mat_a->cols, 0);
-  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
-    mat_c->data[i] = mat_a->data[i] + mat_b->data[i];
+void mat_sum_mat(mat *out, mat *a, mat *b) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows * out->cols; i++) {
+    out->data[i] = a->data[i] + b->data[i];
   }
-  return mat_c;
 }
 
-mat *mat_sub_float(mem_arena *arena, mat *restrict mat_a, f32 f) {
-  mat *mat_b = mat_create(arena, mat_a->rows, mat_a->cols, NULL);
-  for (u32 i = 0; i < mat_a->rows * mat_a->cols; i++) {
-    mat_b->data[i] = mat_a->data[i] - f;
+void mat_sub_float(mat *out, mat *a, f32 f) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows * out->cols; i++) {
+    out->data[i] = a->data[i] - f;
   }
-  return mat_b;
 }
 
-mat *mat_sub_mat(mem_arena *arena, mat *restrict mat_a, mat *restrict mat_b) {
-  mat *mat_c = mat_create(arena, mat_a->rows, mat_a->cols, 0);
-  for (u32 i = 0; i < mat_c->rows * mat_c->cols; i++) {
-    mat_c->data[i] = mat_a->data[i] - mat_b->data[i];
+void mat_sub_mat(mat *out, mat *a, mat *b) {
+  ASSERT(out->rows == a->rows, "incorrect output matrix size!\n");
+  ASSERT(out->cols == a->cols, "incorrect output matrix size!\n");
+
+  for (u32 i = 0; i < out->rows * out->cols; i++) {
+    out->data[i] = a->data[i] - b->data[i];
   }
-  return mat_c;
 }
 
-void black_box(mem_arena *arena, params *p) {
+void black_box(mem_arena *arena, parameters *p) {
+  u64 mark = arena->offset;
+
   u32 m = p->X->rows;
-  mat *y_hat;
-
-  u32 iterations = 1000;
+  u32 iterations = 1600;
   f32 learning_step = 0.01f;
 
-  mat *X_transposed = mat_transpose(arena, p->X);
+  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols, NULL);
+  mat *error = mat_create(arena, y_hat->rows, y_hat->cols, NULL);
+  mat *dw = mat_create(arena, p->w->rows, p->w->cols, NULL);
+  mat *X_T = mat_create(arena, p->X->cols, p->X->rows, NULL);
+  mat_transpose(X_T, p->X);
 
   for (u32 i = 0; i < iterations; i++) {
-    u64 mark = arena_mark(arena);
+    mat_mul(y_hat, p->X, p->w);
+    mat_sum_float(y_hat, y_hat, p->b);
 
-    y_hat = mat_sum_float(arena, mat_mul(arena, p->X, p->w), p->b);
+    mat_sub_mat(error, y_hat, p->y);
 
-    mat *error = mat_sub_mat(arena, y_hat, p->y);
-
-    mat *dw = mat_scale(arena, mat_mul(arena, X_transposed, error), 1.0f / m);
+    mat_mul(dw, X_T, error);
+    mat_scale(dw, dw, 1.0f / m);
 
     f32 db = (1.0f / m) * mat_sum(error);
 
@@ -214,15 +218,50 @@ void black_box(mem_arena *arena, params *p) {
     }
 
     p->b -= db * learning_step;
+  }
 
-    arena_goto(arena, mark);
+  printf("arena size: %f MiB\n", (f32)arena->offset / MiB(1));
+
+  arena->offset = mark;
+}
+
+// def calculate_rmse(self: "LinearRegression", X: np.ndarray,
+// y: np.ndarray) -> float:
+//     y_hat = self.predict(X)
+//
+//     return np.sqrt(np.mean((y_hat - y) ** 2))
+
+f32 calculate_r2(mem_arena *arena, parameters *p) {
+  u64 mark = arena->offset;
+  mat *y_hat = mat_create(arena, p->X->rows, p->w->cols, NULL);
+  mat_mul(y_hat, p->X, p->w);
+  mat_sum_float(y_hat, y_hat, p->b);
+
+  f32 y_mean = mat_sum(p->y) / p->y->rows;
+  f32 ss_res = 0.0f;
+  f32 ss_tot = 0.0f;
+
+  for (u32 i = 0; i < p->y->rows; i++) {
+    f32 res = p->y->data[i] - y_hat->data[i];
+    ss_res += res * res;
+
+    f32 tot = p->y->data[i] - y_mean;
+    ss_tot += tot * tot;
+  }
+
+  arena->offset = mark;
+
+  if (ss_tot == 0.0f) {
+    return 0.0f;
+  } else {
+    return 1.0f - (ss_res / ss_tot);
   }
 }
 
 i32 main(void) {
   mem_arena *arena = arena_create(MiB(20));
 
-  params *p = arena_alloc(arena, sizeof(params));
+  parameters *p = arena_alloc(arena, sizeof(parameters));
 
   f32 test_X[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
                   2.0f, 1.0f, 1.0f, 2.0f, 3.0f, 2.0f, 2.0f, 3.0f};
@@ -235,12 +274,11 @@ i32 main(void) {
   p->b = 0.0f;
 
   black_box(arena, p);
-
+  f32 r2 = calculate_r2(arena, p);
+  printf("r2: %f\n", r2);
+  printf(" b: %f\n", p->b);
   for (u32 i = 0; i < p->w->cols * p->w->rows; i++) {
-    if (i % p->w->cols == 0) {
-      printf("\n");
-    }
-    printf("%.0f ", p->w->data[i]);
+    printf("%f ", p->w->data[i]);
   }
   printf("\n");
 
