@@ -202,12 +202,10 @@ void mat_sub_mat(mat *out, mat *a, mat *b) {
   }
 }
 
-void black_box(mem_arena *arena, parameters *p) {
+void fit(mem_arena *arena, parameters *p, u64 epochs, f32 step) {
   u64 mark = arena_mark(arena);
 
   u32 m = p->X->rows;
-  u32 iterations = 20000;
-  f32 learning_step = 0.01f;
 
   mat *y_hat = mat_create(arena, p->X->rows, p->w->cols);
   mat *error = mat_create(arena, y_hat->rows, y_hat->cols);
@@ -215,7 +213,7 @@ void black_box(mem_arena *arena, parameters *p) {
   mat *X_T = mat_create(arena, p->X->cols, p->X->rows);
   mat_transpose(X_T, p->X);
 
-  for (u32 i = 0; i < iterations; i++) {
+  for (u32 i = 0; i < epochs; i++) {
     mat_mul(y_hat, p->X, p->w);
     mat_sum_float(y_hat, y_hat, p->b);
 
@@ -227,10 +225,10 @@ void black_box(mem_arena *arena, parameters *p) {
     f32 db = (1.0f / m) * mat_sum(error);
 
     for (u32 j = 0; j < p->w->rows * p->w->cols; j++) {
-      p->w->data[j] -= learning_step * dw->data[j];
+      p->w->data[j] -= step * dw->data[j];
     }
 
-    p->b -= db * learning_step;
+    p->b -= db * step;
   }
 
   arena_goto(arena, mark);
@@ -328,7 +326,6 @@ mat *mat_load_csv(mem_arena *arena, const char *file_path) {
 // - one-hot encoding
 // - standardization
 // - dynamic iterations
-// - split black_box into named functions
 // - dynamic arena alloc
 
 i32 main(void) {
@@ -344,7 +341,10 @@ i32 main(void) {
   p->w = mat_create(arena, p->X->cols, 1);
   p->b = 0.0f;
 
-  black_box(arena, p);
+  u64 epochs = 20000;
+  f32 step = 0.01f;
+
+  fit(arena, p, epochs, step);
 
   mat *test_X = mat_load_csv(arena, "c_test_x.csv");
   mat *test_y = mat_load_csv(arena, "c_test_y.csv");
